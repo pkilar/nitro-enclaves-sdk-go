@@ -4,8 +4,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
-	"github.com/stretchr/testify/require"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -61,4 +63,46 @@ func TestDecodeCiphertextForRecipient(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, plaintextKey, dataKey)
+}
+
+// TestDecodeCiphertextForRecipient_Concurrent reproduces the data race in
+// asn1Structured.EncodeTo / ber2der: a package-level encodeIndent counter
+// was incremented and decremented without synchronization, so concurrent
+// callers (e.g. two goroutines both decrypting valid envelopes) tripped
+// the race detector. The fix removes the dead variable; this test guards
+// against its reintroduction.
+func TestDecodeCiphertextForRecipient_Concurrent(t *testing.T) {
+	block, _ := pem.Decode([]byte(testPrivateKey))
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	require.NoError(t, err)
+
+	ciphertext, err := base64.StdEncoding.DecodeString(testCiphertextString)
+	require.NoError(t, err)
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dataKey, err := DecryptEnvelopedKey(key, ciphertext)
+			if err != nil {
+				errs <- err
+				return
+			}
+			// Sanity check — same plaintext on every goroutine.
+			for i, b := range dataKey {
+				if b != plaintextKey[i] {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent decrypt: %v", err)
+	}
 }

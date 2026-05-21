@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/hf/nsm"
@@ -13,14 +14,15 @@ import (
 	"github.com/edgebitio/nitro-enclaves-sdk-go/crypto/cms"
 )
 
-const (
-	defaultKeyBits = 2048
-)
+// defaultKeyBits is fixed at 2048 because KMS Recipient currently only accepts
+// RSA-2048 with OAEP-SHA-256 (per the AWS KMS Recipient documentation). If KMS
+// adds larger key sizes, lift this into AttestationOptions.
+const defaultKeyBits = 2048
 
 var (
-	globalHandle        *EnclaveHandle
-	initializationError error
-	initMutex           sync.Mutex
+	globalHandle *EnclaveHandle
+	initErr      error
+	initOnce     sync.Once
 )
 
 type AttestationOptions struct {
@@ -32,7 +34,7 @@ type AttestationOptions struct {
 	// for application-defined purposes.
 	UserData []byte
 
-	// NoPublicKey will prevent the defaul public key from being included in the attestation.
+	// NoPublicKey will prevent the default public key from being included in the attestation.
 	NoPublicKey bool
 
 	// PublicKey is an optional public key which will be included in the attestation. Valid types
@@ -53,12 +55,17 @@ func (enclave *EnclaveHandle) initialize() error {
 
 	enclave.nsm, err = nsm.OpenDefaultSession()
 	if err != nil {
-		return err
+		return fmt.Errorf("nsm: open session: %w", err)
 	}
 
 	enclave.key, err = rsa.GenerateKey(rand.Reader, defaultKeyBits)
 	if err != nil {
-		return err
+		// Drop the NSM session so a single failed init does not leak it for
+		// the lifetime of the process. GetOrInitializeHandle caches the error
+		// and never retries, so there is no recovery path otherwise.
+		enclave.nsm.Close()
+		enclave.nsm = nil
+		return fmt.Errorf("generate rsa key: %w", err)
 	}
 
 	return nil
@@ -73,12 +80,12 @@ func (enclave *EnclaveHandle) Attest(args AttestationOptions) ([]byte, error) {
 	if args.PublicKey != nil && !args.NoPublicKey {
 		publicKey, err = x509.MarshalPKIXPublicKey(args.PublicKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("marshal supplied public key: %w", err)
 		}
 	} else if !args.NoPublicKey {
 		publicKey, err = x509.MarshalPKIXPublicKey(enclave.PublicKey())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("marshal enclave public key: %w", err)
 		}
 	}
 
@@ -88,11 +95,11 @@ func (enclave *EnclaveHandle) Attest(args AttestationOptions) ([]byte, error) {
 		PublicKey: publicKey,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("nsm: send attestation request: %w", err)
 	}
 
 	if res.Error != "" {
-		return nil, errors.New(string(res.Error))
+		return nil, fmt.Errorf("nsm: attestation failed: %s", res.Error)
 	}
 
 	if res.Attestation == nil || res.Attestation.Document == nil {
@@ -102,7 +109,7 @@ func (enclave *EnclaveHandle) Attest(args AttestationOptions) ([]byte, error) {
 	return res.Attestation.Document, nil
 }
 
-// PublicKey reutrns a reference to the Handle's public key.
+// PublicKey returns a reference to the Handle's public key.
 func (enclave *EnclaveHandle) PublicKey() *rsa.PublicKey {
 	return &enclave.key.PublicKey
 }
@@ -119,19 +126,16 @@ func (enclave *EnclaveHandle) DecryptKMSEnvelopedKey(content []byte) ([]byte, er
 // the error occurred during a previous initialization attempt), the error will
 // be returned.
 func GetOrInitializeHandle() (*EnclaveHandle, error) {
-	initMutex.Lock()
-	defer initMutex.Unlock()
-
-	if globalHandle == nil && initializationError == nil {
+	initOnce.Do(func() {
 		enclave := &EnclaveHandle{}
 		if err := enclave.initialize(); err != nil {
-			initializationError = err
-		} else {
-			globalHandle = enclave
+			initErr = err
+			return
 		}
-	}
+		globalHandle = enclave
+	})
 
-	return globalHandle, initializationError
+	return globalHandle, initErr
 }
 
 // MustGlobalHandle returns a reference to the default enclave handle. If no

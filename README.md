@@ -85,7 +85,7 @@ ephemeral, and generate a new key for each enclave instance.*
 First, add this library as a dependency:
 
 ```sh
-go get github.com/edgebitio/nitro-enclaves-sdk-go@latest
+go get github.com/pkilar/nitro-enclaves-sdk-go@latest
 ```
 
 Then, in your code, grab a reference to the global handle, and use it to request
@@ -93,7 +93,7 @@ an attestation document:
 
 ```go
 import (
-	enclave "github.com/edgebitio/nitro-enclaves-sdk-go"
+	enclave "github.com/pkilar/nitro-enclaves-sdk-go"
 )
 
 func MakeKMSRequest() error {
@@ -118,8 +118,9 @@ the Nitro Enclaves `Recipient` parameter on `Decrypt`, `GenerateDataKey`, and
 `GenerateRandom`. Use the upstream SDK directly — no `replace` directive or
 forked client is needed.
 
-> **Note:** Earlier versions of this project published a forked KMS client at
-> `github.com/edgebitio/nitro-enclaves-sdk-go/kms` for use as a drop-in
+> **Note:** Earlier versions of this project (previously published at
+> `github.com/edgebitio/nitro-enclaves-sdk-go`) included a forked KMS client
+> at `github.com/edgebitio/nitro-enclaves-sdk-go/kms` for use as a drop-in
 > replacement. That fork has been removed; consumers should switch to the
 > upstream `aws-sdk-go-v2/service/kms` package.
 
@@ -196,9 +197,9 @@ you will likely want:
    enforce separation of duties.
 
 
-[ci-badge]: https://github.com/edgebitio/nitro-enclaves-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main
-[ci]: https://github.com/edgebitio/nitro-enclaves-sdk-go/actions/workflows/ci.yml
-[go-reportcard-badge]: https://goreportcard.com/badge/github.com/edgebitio/nitro-enclaves-sdk-go
-[go-reportcard]: https://goreportcard.com/report/github.com/edgebitio/nitro-enclaves-sdk-go
-[pkg.go.dev-badge]: https://pkg.go.dev/badge/github.com/edgebitio/nitro-enclaves-sdk-go.svg
-[pkg.go.dev]: https://pkg.go.dev/github.com/edgebitio/nitro-enclaves-sdk-go
+[ci-badge]: https://github.com/pkilar/nitro-enclaves-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main
+[ci]: https://github.com/pkilar/nitro-enclaves-sdk-go/actions/workflows/ci.yml
+[go-reportcard-badge]: https://goreportcard.com/badge/github.com/pkilar/nitro-enclaves-sdk-go
+[go-reportcard]: https://goreportcard.com/report/github.com/pkilar/nitro-enclaves-sdk-go
+[pkg.go.dev-badge]: https://pkg.go.dev/badge/github.com/pkilar/nitro-enclaves-sdk-go.svg
+[pkg.go.dev]: https://pkg.go.dev/github.com/pkilar/nitro-enclaves-sdk-go

@@ -1,9 +1,11 @@
 package cms
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -82,23 +84,17 @@ func TestDecodeCiphertextForRecipient_Concurrent(t *testing.T) {
 	const goroutines = 8
 	var wg sync.WaitGroup
 	errs := make(chan error, goroutines)
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			dataKey, err := DecryptEnvelopedKey(key, ciphertext)
 			if err != nil {
 				errs <- err
 				return
 			}
-			// Sanity check — same plaintext on every goroutine.
-			for i, b := range dataKey {
-				if b != plaintextKey[i] {
-					errs <- err
-					return
-				}
+			if !bytes.Equal(dataKey, plaintextKey) {
+				errs <- fmt.Errorf("plaintext mismatch: got %x, want %x", dataKey, plaintextKey)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

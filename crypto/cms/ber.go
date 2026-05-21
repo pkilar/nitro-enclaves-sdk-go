@@ -1,7 +1,8 @@
 package cms
 
-// Note: This file is taken directly from github.com/mozilla-services/pkcs7,
-// and is MIT licensed.
+// Note: This file is derived from github.com/mozilla-services/pkcs7
+// (MIT licensed) and has diverged from upstream: local fixes for a data
+// race, several panic vectors in readObject, and dropped debug scaffolding.
 
 import (
 	"bytes"
@@ -61,11 +62,9 @@ func ber2der(ber []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	obj.EncodeTo(out)
-
-	// if offset < len(ber) {
-	//	return nil, fmt.Errorf("ber2der: Content longer than expected. Got %d, expected %d", offset, len(ber))
-	//}
+	if err := obj.EncodeTo(out); err != nil {
+		return nil, err
+	}
 
 	return out.Bytes(), nil
 }
@@ -145,30 +144,23 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		for ber[offset] >= 0x80 {
 			tag = tag*128 + ber[offset] - 0x80
 			offset++
-			if offset > berLen {
+			if offset >= berLen {
 				return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 			}
 		}
-		// jvehent 20170227: this doesn't appear to be used anywhere...
-		//tag = tag*128 + ber[offset] - 0x80
 		offset++
-		if offset > berLen {
+		if offset >= berLen {
 			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 		}
 	}
 	tagEnd := offset
 
 	kind := b & 0x20
-	if kind == 0 {
-		debugprint("--> Primitive\n")
-	} else {
-		debugprint("--> Constructed\n")
-	}
 	// read length
 	var length int
 	l := ber[offset]
 	offset++
-	if offset > berLen {
+	if offset >= berLen {
 		return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 	}
 	indefinite := false
@@ -183,12 +175,10 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		if (int)(ber[offset]) == 0x0 {
 			return nil, 0, errors.New("ber2der: BER tag length has leading zero")
 		}
-		debugprint("--> (compute length) indicator byte: %x\n", l)
-		debugprint("--> (compute length) length bytes: % X\n", ber[offset:offset+numberOfBytes])
-		for i := 0; i < numberOfBytes; i++ {
+		for range numberOfBytes {
 			length = length*256 + (int)(ber[offset])
 			offset++
-			if offset > berLen {
+			if offset >= berLen {
 				return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 			}
 		}
@@ -200,14 +190,10 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	if length < 0 {
 		return nil, 0, errors.New("ber2der: invalid negative value found in BER tag length")
 	}
-	//fmt.Printf("--> length        : %d\n", length)
 	contentEnd := offset + length
 	if contentEnd > len(ber) {
 		return nil, 0, errors.New("ber2der: BER tag length is more than available data")
 	}
-	debugprint("--> content start : %d\n", offset)
-	debugprint("--> content end   : %d\n", contentEnd)
-	debugprint("--> content       : % X\n", ber[offset:contentEnd])
 	var obj asn1Object
 	if indefinite && kind == 0 {
 		return nil, 0, errors.New("ber2der: Indefinite form tag must have constructed encoding")
@@ -259,9 +245,5 @@ func isIndefiniteTermination(ber []byte, offset int) (bool, error) {
 		return false, errors.New("ber2der: Invalid BER format")
 	}
 
-	return bytes.Index(ber[offset:], []byte{0x0, 0x0}) == 0, nil
-}
-
-func debugprint(format string, a ...interface{}) {
-	//fmt.Printf(format, a)
+	return ber[offset] == 0x0 && ber[offset+1] == 0x0, nil
 }

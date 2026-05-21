@@ -1,6 +1,6 @@
 # Nitro Enclaves SDK for Go
 
-[![Go Report Card][go-reportcard-badge]][go-reportcard] [![Go Reference][pkg.go.dev-badge]][pkg.go.dev]
+[![CI][ci-badge]][ci] [![Go Report Card][go-reportcard-badge]][go-reportcard] [![Go Reference][pkg.go.dev-badge]][pkg.go.dev]
 
 A pure Go library for utilizing AWS KMS's support for Nitro Enclaves, similar to the
 [AWS Nitro Enclaves SDK for C](https://github.com/aws/aws-nitro-enclaves-sdk-c).
@@ -196,6 +196,8 @@ you will likely want:
    enforce separation of duties.
 
 
+[ci-badge]: https://github.com/edgebitio/nitro-enclaves-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main
+[ci]: https://github.com/edgebitio/nitro-enclaves-sdk-go/actions/workflows/ci.yml
 [go-reportcard-badge]: https://goreportcard.com/badge/github.com/edgebitio/nitro-enclaves-sdk-go
 [go-reportcard]: https://goreportcard.com/report/github.com/edgebitio/nitro-enclaves-sdk-go
 [pkg.go.dev-badge]: https://pkg.go.dev/badge/github.com/edgebitio/nitro-enclaves-sdk-go.svg

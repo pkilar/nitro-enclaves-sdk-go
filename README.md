@@ -1,6 +1,6 @@
 # Nitro Enclaves SDK for Go
 
-[![Go Report Card][go-reportcard-badge]][go-reportcard] [![Go Reference][pkg.go.dev-badge]][pkg.go.dev]
+[![CI][ci-badge]][ci] [![Go Report Card][go-reportcard-badge]][go-reportcard] [![Go Reference][pkg.go.dev-badge]][pkg.go.dev]
 
 A pure Go library for utilizing AWS KMS's support for Nitro Enclaves, similar to the
 [AWS Nitro Enclaves SDK for C](https://github.com/aws/aws-nitro-enclaves-sdk-c).
@@ -25,7 +25,7 @@ into a Docker image:
 
 ```Dockerfile
 # Build Image Stage
-FROM golang:1.18-alpine AS app-builder
+FROM golang:1.26-alpine AS app-builder
 WORKDIR /usr/src/go-enclave-app
 COPY . .
 RUN go build -v -o /usr/local/bin/go-enclave-app main.go
@@ -113,40 +113,35 @@ func MakeKMSRequest() error {
 
 ## Making KMS Requests
 
-Official AWS SDKs do not include support for Nitro Enclaves. They are also
-extensive, and well-maintained, so forking or re-implementing them is not a good
-option.
+Modern versions of `github.com/aws/aws-sdk-go-v2/service/kms` natively support
+the Nitro Enclaves `Recipient` parameter on `Decrypt`, `GenerateDataKey`, and
+`GenerateRandom`. Use the upstream SDK directly — no `replace` directive or
+forked client is needed.
 
-Instead, this library provides a drop-in replacement for
-`github.com/aws/aws-sdk-go-v2/service/kms`, which can be used trasparently via
-the Go Modules `replace` directive.
-
-To do so, within your module run:
+> **Note:** Earlier versions of this project published a forked KMS client at
+> `github.com/edgebitio/nitro-enclaves-sdk-go/kms` for use as a drop-in
+> replacement. That fork has been removed; consumers should switch to the
+> upstream `aws-sdk-go-v2/service/kms` package.
 
 ```sh
-go mod edit -replace \
-    github.com/aws/aws-sdk-go-v2/service/kms=github.com/edgebitio/nitro-enclaves-sdk-go/kms@latest
+go get github.com/aws/aws-sdk-go-v2/service/kms@latest
 ```
 
-Depending on your configuration you likely need to run `go mod tidy` and
-possibly `go mod vendor` after this.
-
-Now you can instantiate the KMS client and use it to make requests,
-with the option to include an attestation document on Decrypt, GenerateDataKey,
-and GenerateRandom operations using the `Recipient` input field:
+You can then instantiate the upstream KMS client and include an attestation
+document on supported operations via the `Recipient` input field:
 
 ```go
 	ctx := context.TODO()
-	config, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-west-2"))
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-west-2"))
 	if err != nil {
 		return err
 	}
 
-	kmsClient := kms.NewFromConfig(config)
+	kmsClient := kms.NewFromConfig(cfg)
 
 	// Request a 32 byte data key from KMS, for use in AES-256 operations.
-	dataKeyRes, err := kmsClient.GenerateDataKey(context.Background(), &kms.GenerateDataKeyInput{
-		KeyId:   "arn:aws:kms:us-west-2:xxxxxxxxxx:key/12345678-abcd-ef12-1234-abcdef123456",
+	dataKeyRes, err := kmsClient.GenerateDataKey(ctx, &kms.GenerateDataKeyInput{
+		KeyId:   aws.String("arn:aws:kms:us-west-2:xxxxxxxxxx:key/12345678-abcd-ef12-1234-abcdef123456"),
 		KeySpec: types.DataKeySpecAes256,
 		Recipient: &types.RecipientInfoType{
 			AttestationDocument:    attestationDocument,
@@ -201,6 +196,8 @@ you will likely want:
    enforce separation of duties.
 
 
+[ci-badge]: https://github.com/edgebitio/nitro-enclaves-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main
+[ci]: https://github.com/edgebitio/nitro-enclaves-sdk-go/actions/workflows/ci.yml
 [go-reportcard-badge]: https://goreportcard.com/badge/github.com/edgebitio/nitro-enclaves-sdk-go
 [go-reportcard]: https://goreportcard.com/report/github.com/edgebitio/nitro-enclaves-sdk-go
 [pkg.go.dev-badge]: https://pkg.go.dev/badge/github.com/edgebitio/nitro-enclaves-sdk-go.svg

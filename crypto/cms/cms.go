@@ -58,6 +58,12 @@ func (ek *EncryptedKey) Decrypt(key *rsa.PrivateKey) ([]byte, error) {
 		return nil, errors.New("pkcs7: encryption algorithm parameters are malformed")
 	}
 
+	// CryptBlocks panics if src is not a multiple of the block size; ciphertext
+	// crosses the network so validate before decrypting.
+	if len(ek.cipherText) == 0 || len(ek.cipherText)%block.BlockSize() != 0 {
+		return nil, errors.New("cms: ciphertext length is not a multiple of the block size")
+	}
+
 	mode := cipher.NewCBCDecrypter(block, ek.iv)
 	plaintext := make([]byte, len(ek.cipherText))
 	mode.CryptBlocks(plaintext, ek.cipherText)
@@ -78,6 +84,14 @@ func unpad(data []byte, blocklen int) ([]byte, error) {
 
 	// the last byte is the length of padding
 	padlen := int(data[len(data)-1])
+
+	// PKCS#7 padding length must satisfy 1 <= padlen <= blocklen, and cannot
+	// exceed the available data. Without these guards a crafted ciphertext can
+	// either silently bypass unpadding (padlen == 0) or panic on a negative
+	// slice index (padlen > len(data)).
+	if padlen == 0 || padlen > blocklen || padlen > len(data) {
+		return nil, errors.New("invalid padding")
+	}
 
 	// check padding integrity, all bytes should be the same
 	pad := data[len(data)-padlen:]
@@ -111,7 +125,7 @@ func Parse(ber []byte) (*EncryptedKey, error) {
 	}
 
 	if ci.Content.Version != EnvelopedDataVersion {
-		return nil, fmt.Errorf("cms: unexpcted enveloped data version")
+		return nil, fmt.Errorf("cms: unexpected enveloped data version")
 	}
 
 	if len(ci.Content.RecipientInfos) != 1 {
@@ -137,20 +151,24 @@ func Parse(ber []byte) (*EncryptedKey, error) {
 		return nil, fmt.Errorf("cms: unexpected content encryption algorithm")
 	}
 
-	// EncryptedContent can either be constructed of multple OCTET STRINGs
+	// EncryptedContent can either be constructed of multiple OCTET STRINGs
 	// or _be_ a tagged OCTET STRING
 	var ciphertext []byte
 	if eci.EncryptedContent.IsCompound {
-		// Complex case to concat all of the children OCTET STRINGs
+		// Complex case to concat all of the children OCTET STRINGs.
+		// Loop on len(...) > 0 so we never call asn1.Unmarshal on empty
+		// input (which would error). Real mid-stream parse errors are now
+		// propagated instead of silently terminating the loop.
 		var buf bytes.Buffer
 		cipherbytes := eci.EncryptedContent.Bytes
-		for {
+		for len(cipherbytes) > 0 {
 			var part []byte
-			cipherbytes, _ = asn1.Unmarshal(cipherbytes, &part)
-			buf.Write(part)
-			if cipherbytes == nil {
-				break
+			var err error
+			cipherbytes, err = asn1.Unmarshal(cipherbytes, &part)
+			if err != nil {
+				return nil, fmt.Errorf("cms: parse compound OCTET STRING: %w", err)
 			}
+			buf.Write(part)
 		}
 		ciphertext = buf.Bytes()
 	} else {

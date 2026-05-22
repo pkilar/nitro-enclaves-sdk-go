@@ -1,4 +1,4 @@
-module github.com/edgebitio/nitro-enclaves-sdk-go
+module github.com/pkilar/nitro-enclaves-sdk-go
 
 go 1.26.0
 

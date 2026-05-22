@@ -11,7 +11,7 @@ import (
 	"github.com/hf/nsm"
 	"github.com/hf/nsm/request"
 
-	"github.com/edgebitio/nitro-enclaves-sdk-go/crypto/cms"
+	"github.com/pkilar/nitro-enclaves-sdk-go/crypto/cms"
 )
 
 // defaultKeyBits is fixed at 2048 because KMS Recipient currently only accepts

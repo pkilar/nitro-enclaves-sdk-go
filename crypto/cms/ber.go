@@ -27,7 +27,9 @@ func (s asn1Structured) EncodeTo(out *bytes.Buffer) error {
 		}
 	}
 	out.Write(s.tagBytes)
-	encodeLength(out, inner.Len())
+	if err := encodeLength(out, inner.Len()); err != nil {
+		return err
+	}
 	out.Write(inner.Bytes())
 	return nil
 }

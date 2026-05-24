@@ -63,7 +63,7 @@ func (enclave *EnclaveHandle) initialize() error {
 		// Drop the NSM session so a single failed init does not leak it for
 		// the lifetime of the process. GetOrInitializeHandle caches the error
 		// and never retries, so there is no recovery path otherwise.
-		enclave.nsm.Close()
+		_ = enclave.nsm.Close()
 		enclave.nsm = nil
 		return fmt.Errorf("generate rsa key: %w", err)
 	}

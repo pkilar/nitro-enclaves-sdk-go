@@ -25,7 +25,7 @@ into a Docker image:
 
 ```Dockerfile
 # Build Image Stage
-FROM golang:1.26-alpine AS app-builder
+FROM golang:1.27-alpine AS app-builder
 WORKDIR /usr/src/go-enclave-app
 COPY . .
 RUN go build -v -o /usr/local/bin/go-enclave-app main.go

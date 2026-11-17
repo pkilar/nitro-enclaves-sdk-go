@@ -52,16 +52,25 @@ var (
 	// numeric order.
 	pcrEncoding = mustEncMode(cbor.EncOptions{Sort: cbor.SortBytewiseLexical})
 
-	// docDecoding rejects duplicate keys and bounds how deep and how wide
-	// the document may be. Indefinite lengths and tags stay allowed, as in
-	// the Rust decoder, because the NSM's encoder is not ours to constrain.
+	// docDecoding matches field names exactly, rejects duplicate keys, and
+	// bounds how deep and how wide the document may be. Indefinite lengths
+	// and tags stay allowed, as in the Rust decoder, because the NSM's
+	// encoder is not ours to constrain.
 	docDecoding = mustDecMode(cbor.DecOptions{
-		DupMapKey:        cbor.DupMapKeyEnforcedAPF,
-		MaxNestedLevels:  4,
-		MaxArrayElements: 64,
-		MaxMapPairs:      64,
+		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
+		FieldNameMatching: cbor.FieldNameMatchingCaseSensitive,
+		MaxNestedLevels:   4,
+		MaxArrayElements:  64,
+		MaxMapPairs:       64,
 	})
+
+	// mandatoryDocFields are the entries every attestation document has. The
+	// other three are optional.
+	mandatoryDocFields = [...]string{"module_id", "digest", "timestamp", "pcrs", "certificate", "cabundle"}
 )
+
+// cborNull is the encoding of CBOR null.
+const cborNull = 0xf6
 
 // mustEncMode builds an encoding mode from fixed options, which cannot fail
 // unless the options are wrong.
@@ -86,18 +95,36 @@ func mustDecMode(opts cbor.DecOptions) cbor.DecMode {
 }
 
 // ParseAttestationDoc decodes the content of an attestation document without
-// verifying anything. payload is the payload of the COSE_Sign1 envelope, not
-// the envelope itself; the caller must have checked the envelope's signature
-// and certificate chain before trusting the result.
+// verifying where it came from. payload is the payload of the COSE_Sign1
+// envelope, not the envelope itself; the caller must have checked the
+// envelope's signature and certificate chain before trusting the result.
+//
+// It does check the document's shape: the six mandatory fields must be
+// present and the digest must be one the NSM uses.
 func ParseAttestationDoc(payload []byte) (*AttestationDoc, error) {
 	if len(payload) > MaxResponseSize {
 		return nil, fmt.Errorf("nsm: attestation document of %d bytes is over the %d-byte limit",
 			len(payload), MaxResponseSize)
 	}
 
+	// Decoding into the struct cannot tell an absent field from a zero one,
+	// so presence is checked on the raw entries first.
+	var entries map[string]cbor.RawMessage
+	if err := docDecoding.Unmarshal(payload, &entries); err != nil {
+		return nil, fmt.Errorf("nsm: decode attestation document: %w", err)
+	}
+	for _, name := range mandatoryDocFields {
+		if raw, ok := entries[name]; !ok || (len(raw) == 1 && raw[0] == cborNull) {
+			return nil, fmt.Errorf("nsm: decode attestation document: missing field %q", name)
+		}
+	}
+
 	var doc AttestationDoc
 	if err := docDecoding.Unmarshal(payload, &doc); err != nil {
 		return nil, fmt.Errorf("nsm: decode attestation document: %w", err)
+	}
+	if doc.Digest.Size() == 0 {
+		return nil, fmt.Errorf("nsm: decode attestation document: unknown digest %q", doc.Digest)
 	}
 
 	return &doc, nil

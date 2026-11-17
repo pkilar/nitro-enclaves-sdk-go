@@ -12,19 +12,23 @@ import (
 	"github.com/pkilar/nitro-enclaves-sdk-go/nsm/response"
 )
 
-// docFixture is docFixtureValue encoded by hand from the CBOR rules: a
-// nine-entry map with the fields in declaration order and the PCR indexes
-// ascending.
-const docFixture = "a9" +
-	"696d6f64756c655f6964" + "63692d31" + // "module_id": "i-1"
-	"66646967657374" + "66534841333834" + // "digest": "SHA384"
-	"6974696d657374616d70" + "1b0000018bcfe56800" + // "timestamp": 1700000000000
-	"6470637273" + "a4" + "0041aa" + "0141bb" + "0241cc" + "181841dd" + // "pcrs": {0: h'aa', 1: h'bb', 2: h'cc', 24: h'dd'}
-	"6b6365727469666963617465" + "4101" + // "certificate": h'01'
-	"68636162756e646c65" + "82" + "4102" + "4103" + // "cabundle": [h'02', h'03']
-	"6a7075626c69635f6b6579" + "f6" + // "public_key": null
-	"69757365725f64617461" + "4175" + // "user_data": h'75'
-	"656e6f6e6365" + "f6" // "nonce": null
+// The entries of docFixture, each written out by hand from the CBOR rules.
+const (
+	docModuleID    = "696d6f64756c655f6964" + "63692d31"                               // "module_id": "i-1"
+	docDigest      = "66646967657374" + "66534841333834"                               // "digest": "SHA384"
+	docTimestamp   = "6974696d657374616d70" + "1b0000018bcfe56800"                     // "timestamp": 1700000000000
+	docPCRs        = "6470637273" + "a4" + "0041aa" + "0141bb" + "0241cc" + "181841dd" // "pcrs": {0: h'aa', 1: h'bb', 2: h'cc', 24: h'dd'}
+	docCertificate = "6b6365727469666963617465" + "4101"                               // "certificate": h'01'
+	docCABundle    = "68636162756e646c65" + "82" + "4102" + "4103"                     // "cabundle": [h'02', h'03']
+	docPublicKey   = "6a7075626c69635f6b6579" + "f6"                                   // "public_key": null
+	docUserData    = "69757365725f64617461" + "4175"                                   // "user_data": h'75'
+	docNonce       = "656e6f6e6365" + "f6"                                             // "nonce": null
+)
+
+// docFixture is docFixtureValue encoded: a nine-entry map with the fields in
+// declaration order and the PCR indexes ascending.
+const docFixture = "a9" + docModuleID + docDigest + docTimestamp + docPCRs + docCertificate + docCABundle +
+	docPublicKey + docUserData + docNonce
 
 func docFixtureValue() *AttestationDoc {
 	return &AttestationDoc{
@@ -116,6 +120,10 @@ func TestParseAttestationDoc_RejectsMalformedPayloads(t *testing.T) {
 	}{
 		{name: "empty", payload: nil},
 		{name: "not a map", payload: fromHex(t, "01")},
+		{name: "empty map", payload: fromHex(t, "a0")},
+		// "digest": "SHA1"
+		{name: "unknown digest", payload: fromHex(t, strings.Replace(docFixture,
+			docDigest, "66646967657374"+"6453484131", 1))},
 		{name: "truncated", payload: fromHex(t, docFixture[:len(docFixture)-4])},
 		{name: "trailing bytes", payload: fromHex(t, docFixture+"00")},
 		{name: "duplicate key", payload: fromHex(t, duplicateKey)},
@@ -149,4 +157,87 @@ func TestParseAttestationDoc_RejectsOversizedPayload(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, got)
+}
+
+func TestParseAttestationDoc_AcceptsDocumentWithoutOptionalFields(t *testing.T) {
+	t.Parallel()
+
+	payload := "a6" + docModuleID + docDigest + docTimestamp + docPCRs + docCertificate + docCABundle
+	want := docFixtureValue()
+	want.UserData = nil
+
+	got, err := ParseAttestationDoc(fromHex(t, payload))
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// Six fields are mandatory. A document that lacks one, has null in its place,
+// or spells its name in another case is not an attestation document.
+func TestParseAttestationDoc_RequiresMandatoryFields(t *testing.T) {
+	t.Parallel()
+
+	optional := docPublicKey + docUserData + docNonce
+	mandatory := []struct {
+		name  string
+		entry string
+	}{
+		{name: "module_id", entry: docModuleID},
+		{name: "digest", entry: docDigest},
+		{name: "timestamp", entry: docTimestamp},
+		{name: "pcrs", entry: docPCRs},
+		{name: "certificate", entry: docCertificate},
+		{name: "cabundle", entry: docCABundle},
+	}
+
+	for i, field := range mandatory {
+		t.Run(field.name+" missing", func(t *testing.T) {
+			var others strings.Builder
+			for j, other := range mandatory {
+				if j != i {
+					others.WriteString(other.entry)
+				}
+			}
+
+			got, err := ParseAttestationDoc(fromHex(t, "a8"+others.String()+optional))
+
+			require.ErrorContains(t, err, field.name)
+			assert.Nil(t, got)
+		})
+	}
+
+	t.Run("module_id null", func(t *testing.T) {
+		// "module_id": null
+		payload := strings.Replace(docFixture, docModuleID, "696d6f64756c655f6964"+"f6", 1)
+
+		got, err := ParseAttestationDoc(fromHex(t, payload))
+
+		require.ErrorContains(t, err, "module_id")
+		assert.Nil(t, got)
+	})
+	t.Run("module_id in upper case", func(t *testing.T) {
+		// "MODULE_ID": "i-1"
+		payload := strings.Replace(docFixture, docModuleID, "694d4f44554c455f4944"+"63692d31", 1)
+
+		got, err := ParseAttestationDoc(fromHex(t, payload))
+
+		require.ErrorContains(t, err, "module_id")
+		assert.Nil(t, got)
+	})
+}
+
+// Names match exactly, as they do for serde, so an entry spelled in another
+// case is an unknown one and is skipped.
+func TestParseAttestationDoc_IgnoresOptionalFieldInAnotherCase(t *testing.T) {
+	t.Parallel()
+
+	// "USER_DATA": h'75'
+	payload := strings.Replace(docFixture, docUserData, "69555345525f44415441"+"4175", 1)
+	want := docFixtureValue()
+	want.UserData = nil
+
+	got, err := ParseAttestationDoc(fromHex(t, payload))
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }

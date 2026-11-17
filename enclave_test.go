@@ -14,21 +14,32 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/hf/nsm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pkilar/nitro-enclaves-sdk-go/crypto/cms"
+	"github.com/pkilar/nitro-enclaves-sdk-go/internal/nsmtest"
+	"github.com/pkilar/nitro-enclaves-sdk-go/nsm"
+	"github.com/pkilar/nitro-enclaves-sdk-go/nsm/response"
 )
 
-// newTestHandle returns a handle whose NSM session is served by device.
-func newTestHandle(t *testing.T, device *fakeNSM) *EnclaveHandle {
+// newTestHandle returns a handle on a new simulated NSM, and the NSM.
+func newTestHandle(t *testing.T) (*EnclaveHandle, *nsmtest.Device) {
 	t.Helper()
 
-	handle, err := NewEnclaveHandle(openFakeNSM(t, device))
+	device := nsmtest.NewDevice()
+	session := nsm.NewSession(device)
+	t.Cleanup(func() { require.NoError(t, session.Close()) })
+
+	handle, err := NewEnclaveHandle(session)
 	require.NoError(t, err)
 
-	return handle
+	return handle, device
+}
+
+// attestationReply is the reply an NSM gives to an attestation request.
+func attestationReply(document []byte) any {
+	return map[string]response.Attestation{"Attestation": {Document: document}}
 }
 
 func TestNewEnclaveHandle_RejectsNilSession(t *testing.T) {
@@ -43,8 +54,8 @@ func TestNewEnclaveHandle_RejectsNilSession(t *testing.T) {
 func TestAttest(t *testing.T) {
 	t.Parallel()
 
-	device := &fakeNSM{reply: attestationReply([]byte("signed document"))}
-	handle := newTestHandle(t, device)
+	handle, device := newTestHandle(t)
+	device.ReplyWith(attestationReply([]byte("signed document")))
 
 	suppliedKey, _, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
@@ -92,16 +103,18 @@ func TestAttest(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, []byte("signed document"), document)
-			assert.Equal(t, tt.wantNonce, device.request.Nonce)
-			assert.Equal(t, tt.wantUserData, device.request.UserData)
+			sent, ok := device.LastAttestation()
+			require.True(t, ok, "the NSM received an attestation request")
+			assert.Equal(t, tt.wantNonce, sent.Nonce)
+			assert.Equal(t, tt.wantUserData, sent.UserData)
 
 			if tt.wantKey == nil {
-				assert.Empty(t, device.request.PublicKey)
+				assert.Empty(t, sent.PublicKey)
 				return
 			}
-			sent, err := x509.ParsePKIXPublicKey(device.request.PublicKey)
+			sentKey, err := x509.ParsePKIXPublicKey(sent.PublicKey)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantKey, sent)
+			assert.Equal(t, tt.wantKey, sentKey)
 		})
 	}
 }
@@ -109,62 +122,75 @@ func TestAttest(t *testing.T) {
 func TestAttest_RejectsUnsupportedPublicKeyType(t *testing.T) {
 	t.Parallel()
 
-	handle := newTestHandle(t, &fakeNSM{reply: attestationReply([]byte("signed document"))})
+	handle, device := newTestHandle(t)
 
 	document, err := handle.Attest(AttestationOptions{PublicKey: "not a public key"})
 
 	require.Error(t, err)
 	assert.Nil(t, document)
+	_, asked := device.LastAttestation()
+	assert.False(t, asked, "the NSM must not be asked when the key cannot be encoded")
 }
 
-func TestAttest_ReturnsErrorWhenNSMGivesNoDocument(t *testing.T) {
+func TestAttest_ReportsRefusalByNSM(t *testing.T) {
 	t.Parallel()
 
-	device := &fakeNSM{}
-	handle := newTestHandle(t, device)
+	handle, device := newTestHandle(t)
+	device.RefuseWith(response.ECInvalidArgument)
+
+	document, err := handle.Attest(AttestationOptions{})
+
+	var nsmErr *nsm.Error
+	require.ErrorAs(t, err, &nsmErr)
+	assert.Equal(t, response.ECInvalidArgument, nsmErr.Code)
+	assert.Nil(t, document)
+}
+
+func TestAttest_ReportsReplyWithoutDocument(t *testing.T) {
+	t.Parallel()
+
+	handle, device := newTestHandle(t)
 
 	tests := []struct {
 		name  string
 		reply any
-		// wantInError must appear in the error; empty accepts any error.
-		wantInError string
+		// wantCode is the NSM error code the error must carry. It is empty for
+		// a reply that cannot be decoded at all, which is not an NSM error.
+		wantCode response.ErrorCode
 	}{
-		{
-			name:        "NSM rejects the request",
-			reply:       errorReply("InvalidArgument"),
-			wantInError: "InvalidArgument",
-		},
-		{
-			name:  "reply is not an attestation",
-			reply: "LockPCR",
-		},
-		{
-			name:  "attestation carries no document",
-			reply: attestationReply(nil),
-		},
+		{name: "reply is not an attestation", reply: "LockPCR", wantCode: response.ECInvalidResponse},
+		{name: "document is empty", reply: attestationReply([]byte{}), wantCode: response.ECInvalidResponse},
+		{name: "document is null", reply: attestationReply(nil)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			device.reply = tt.reply
+			device.ReplyWith(tt.reply)
 
 			document, err := handle.Attest(AttestationOptions{})
 
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.wantInError)
 			assert.Nil(t, document)
+			var nsmErr *nsm.Error
+			if tt.wantCode == "" {
+				assert.NotErrorAs(t, err, &nsmErr)
+				return
+			}
+			require.ErrorAs(t, err, &nsmErr)
+			assert.Equal(t, tt.wantCode, nsmErr.Code)
 		})
 	}
 }
 
-func TestAttest_ReportsIoctlFailure(t *testing.T) {
+func TestAttest_ReportsDeviceFailure(t *testing.T) {
 	t.Parallel()
 
-	handle := newTestHandle(t, &fakeNSM{errno: syscall.EIO})
+	handle, device := newTestHandle(t)
+	device.FailWith(&nsm.IoctlError{Errno: syscall.EIO})
 
 	document, err := handle.Attest(AttestationOptions{})
 
-	var ioctlErr *nsm.ErrorIoctlFailed
+	var ioctlErr *nsm.IoctlError
 	require.ErrorAs(t, err, &ioctlErr)
 	assert.Equal(t, syscall.EIO, ioctlErr.Errno)
 	assert.Nil(t, document)
@@ -175,12 +201,13 @@ func TestAttest_ReportsIoctlFailure(t *testing.T) {
 func TestDecryptKMSEnvelopedKey_OpensEnvelopeEncryptedToAttestedKey(t *testing.T) {
 	t.Parallel()
 
-	device := &fakeNSM{reply: attestationReply([]byte("signed document"))}
-	handle := newTestHandle(t, device)
+	handle, device := newTestHandle(t)
 
 	_, err := handle.Attest(AttestationOptions{})
 	require.NoError(t, err)
-	attested, err := x509.ParsePKIXPublicKey(device.request.PublicKey)
+	sent, ok := device.LastAttestation()
+	require.True(t, ok, "the NSM received an attestation request")
+	attested, err := x509.ParsePKIXPublicKey(sent.PublicKey)
 	require.NoError(t, err)
 	recipient, ok := attested.(*rsa.PublicKey)
 	require.True(t, ok, "attested key has type %T, want *rsa.PublicKey", attested)

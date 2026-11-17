@@ -50,25 +50,26 @@ type EnclaveHandle struct {
 	key *rsa.PrivateKey
 }
 
-func (enclave *EnclaveHandle) initialize() error {
-	var err error
-
-	enclave.nsm, err = nsm.OpenDefaultSession()
-	if err != nil {
-		return fmt.Errorf("nsm: open session: %w", err)
+// NewEnclaveHandle returns a handle that reaches the Nitro Security Module
+// through session and holds a newly generated RSA key pair.
+//
+// The caller keeps ownership of session. The handle never closes it, and it
+// must stay open for as long as the handle is in use.
+//
+// Most callers want GetOrInitializeHandle, which opens the default NSM device
+// itself. Use NewEnclaveHandle to share a session that is already open, or to
+// substitute a different device.
+func NewEnclaveHandle(session *nsm.Session) (*EnclaveHandle, error) {
+	if session == nil {
+		return nil, errors.New("nsm session is nil")
 	}
 
-	enclave.key, err = rsa.GenerateKey(rand.Reader, defaultKeyBits)
+	key, err := rsa.GenerateKey(rand.Reader, defaultKeyBits)
 	if err != nil {
-		// Drop the NSM session so a single failed init does not leak it for
-		// the lifetime of the process. GetOrInitializeHandle caches the error
-		// and never retries, so there is no recovery path otherwise.
-		_ = enclave.nsm.Close()
-		enclave.nsm = nil
-		return fmt.Errorf("generate rsa key: %w", err)
+		return nil, fmt.Errorf("generate rsa key: %w", err)
 	}
 
-	return nil
+	return &EnclaveHandle{nsm: session, key: key}, nil
 }
 
 // Attest generates and returns an attestation document from the enclave's Nitro
@@ -127,12 +128,22 @@ func (enclave *EnclaveHandle) DecryptKMSEnvelopedKey(content []byte) ([]byte, er
 // be returned.
 func GetOrInitializeHandle() (*EnclaveHandle, error) {
 	initOnce.Do(func() {
-		enclave := &EnclaveHandle{}
-		if err := enclave.initialize(); err != nil {
-			initErr = err
+		session, err := nsm.OpenDefaultSession()
+		if err != nil {
+			initErr = fmt.Errorf("nsm: open session: %w", err)
 			return
 		}
-		globalHandle = enclave
+
+		handle, err := NewEnclaveHandle(session)
+		if err != nil {
+			// The error is cached and initialization is never retried, so
+			// close the session here or it stays open for the life of the
+			// process.
+			initErr = errors.Join(err, session.Close())
+			return
+		}
+
+		globalHandle = handle
 	})
 
 	return globalHandle, initErr

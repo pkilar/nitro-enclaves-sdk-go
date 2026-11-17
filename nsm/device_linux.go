@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && (amd64 || arm64)
 
 package nsm
 
@@ -14,8 +14,10 @@ import (
 // devicePath is where the kernel exposes the NSM inside an enclave.
 const devicePath = "/dev/nsm"
 
-// ioctlMessage is the argument of the NSM ioctl: one iovec for the encoded
-// request and one for the buffer the reply is written into.
+// ioctlMessage is the argument of the NSM ioctl, the kernel's struct nsm_raw:
+// one {u64 address, u64 length} pair for the encoded request and one for the
+// buffer the reply is written into. syscall.Iovec has that layout only on a
+// 64-bit system, which is why this file is built for amd64 and arm64 alone.
 type ioctlMessage struct {
 	request  syscall.Iovec
 	response syscall.Iovec

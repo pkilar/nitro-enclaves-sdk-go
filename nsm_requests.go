@@ -8,6 +8,12 @@ import (
 	"github.com/pkilar/nitro-enclaves-sdk-go/nsm/response"
 )
 
+// invalidResponse reports a reply that does not fit the request it answers:
+// one of another kind, or one that carries a PCR with no value.
+func invalidResponse() error {
+	return &nsm.Error{Code: response.ECInvalidResponse}
+}
+
 // send performs one NSM request and returns the part of the reply that pick
 // selects. A reply of another kind is reported as InvalidResponse.
 func send[T any](session *nsm.Session, req request.Request, pick func(response.Response) *T) (*T, error) {
@@ -18,7 +24,7 @@ func send[T any](session *nsm.Session, req request.Request, pick func(response.R
 
 	reply := pick(res)
 	if reply == nil {
-		return nil, &nsm.Error{Code: response.ECInvalidResponse}
+		return nil, invalidResponse()
 	}
 
 	return reply, nil
@@ -34,6 +40,10 @@ func (enclave *EnclaveHandle) DescribePCR(index uint16) (response.DescribePCR, e
 	if err != nil {
 		return response.DescribePCR{}, fmt.Errorf("describe PCR %d: %w", index, err)
 	}
+	// A PCR always has a value of the digest's length.
+	if len(reply.Data) == 0 {
+		return response.DescribePCR{}, fmt.Errorf("describe PCR %d: %w", index, invalidResponse())
+	}
 
 	return *reply, nil
 }
@@ -47,6 +57,9 @@ func (enclave *EnclaveHandle) ExtendPCR(index uint16, data []byte) ([]byte, erro
 		func(res response.Response) *response.ExtendPCR { return res.ExtendPCR })
 	if err != nil {
 		return nil, fmt.Errorf("extend PCR %d: %w", index, err)
+	}
+	if len(reply.Data) == 0 {
+		return nil, fmt.Errorf("extend PCR %d: %w", index, invalidResponse())
 	}
 
 	return reply.Data, nil

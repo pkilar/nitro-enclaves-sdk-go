@@ -169,3 +169,26 @@ func TestDescribePCR_RefusesIndexPastLastPCR(t *testing.T) {
 
 	requireCode(t, err, response.ECInvalidIndex)
 }
+
+// A PCR always has a value of the digest's length, so an empty one means the
+// reply cannot be trusted.
+func TestPCRRequests_RejectEmptyValue(t *testing.T) {
+	t.Parallel()
+
+	handle, device := newTestHandle(t)
+
+	t.Run("DescribePCR", func(t *testing.T) {
+		device.ReplyWith(map[string]response.DescribePCR{"DescribePCR": {Lock: true, Data: []byte{}}})
+
+		_, err := handle.DescribePCR(16)
+
+		requireCode(t, err, response.ECInvalidResponse)
+	})
+	t.Run("ExtendPCR", func(t *testing.T) {
+		device.ReplyWith(map[string]response.ExtendPCR{"ExtendPCR": {Data: []byte{}}})
+
+		_, err := handle.ExtendPCR(16, []byte("measurement"))
+
+		requireCode(t, err, response.ECInvalidResponse)
+	})
+}

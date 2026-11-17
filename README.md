@@ -111,6 +111,27 @@ func MakeKMSRequest() error {
 }
 ```
 
+`GetOrInitializeHandle` opens the enclave's NSM device itself. If you already
+hold an open [`nsm.Session`](https://pkg.go.dev/github.com/hf/nsm#Session), or
+want to substitute a fake device in tests, build the handle from that session
+instead:
+
+```go
+	session, err := nsm.OpenDefaultSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	enclaveHandle, err := enclave.NewEnclaveHandle(session)
+	if err != nil {
+		return err
+	}
+```
+
+The handle does not take ownership of the session, so closing it stays the
+caller's job.
+
 ## Making KMS Requests
 
 Modern versions of `github.com/aws/aws-sdk-go-v2/service/kms` natively support

@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hf/nsm"
-	"github.com/hf/nsm/request"
-
 	"github.com/pkilar/nitro-enclaves-sdk-go/crypto/cms"
+	"github.com/pkilar/nitro-enclaves-sdk-go/nsm"
+	"github.com/pkilar/nitro-enclaves-sdk-go/nsm/request"
+	"github.com/pkilar/nitro-enclaves-sdk-go/nsm/response"
 )
 
 // defaultKeyBits is fixed at 2048 because KMS Recipient currently only accepts
@@ -46,8 +46,8 @@ type AttestationOptions struct {
 // Nitro Security Module, and an in-memory 2048 bit RSA key pair, the public key
 // from which can be automatically included in requested attestation documents.
 type EnclaveHandle struct {
-	nsm *nsm.Session
-	key *rsa.PrivateKey
+	session *nsm.Session
+	key     *rsa.PrivateKey
 }
 
 // NewEnclaveHandle returns a handle that reaches the Nitro Security Module
@@ -69,12 +69,14 @@ func NewEnclaveHandle(session *nsm.Session) (*EnclaveHandle, error) {
 		return nil, fmt.Errorf("generate rsa key: %w", err)
 	}
 
-	return &EnclaveHandle{nsm: session, key: key}, nil
+	return &EnclaveHandle{session: session, key: key}, nil
 }
 
 // Attest generates and returns an attestation document from the enclave's Nitro
 // Security Module. See AttestationOptions for more details on available
 // options.
+//
+// If the NSM refuses the request, the error wraps an *nsm.Error.
 func (enclave *EnclaveHandle) Attest(args AttestationOptions) ([]byte, error) {
 	var publicKey []byte
 	var err error
@@ -90,21 +92,16 @@ func (enclave *EnclaveHandle) Attest(args AttestationOptions) ([]byte, error) {
 		}
 	}
 
-	res, err := enclave.nsm.Send(&request.Attestation{
+	res, err := enclave.session.Send(&request.Attestation{
 		Nonce:     args.Nonce,
 		UserData:  args.UserData,
 		PublicKey: publicKey,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("nsm: send attestation request: %w", err)
+		return nil, fmt.Errorf("attest: %w", err)
 	}
-
-	if res.Error != "" {
-		return nil, fmt.Errorf("nsm: attestation failed: %s", res.Error)
-	}
-
-	if res.Attestation == nil || res.Attestation.Document == nil {
-		return nil, errors.New("attestation response missing attestation document")
+	if res.Attestation == nil || len(res.Attestation.Document) == 0 {
+		return nil, fmt.Errorf("attest: %w", &nsm.Error{Code: response.ECInvalidResponse})
 	}
 
 	return res.Attestation.Document, nil
@@ -128,9 +125,9 @@ func (enclave *EnclaveHandle) DecryptKMSEnvelopedKey(content []byte) ([]byte, er
 // be returned.
 func GetOrInitializeHandle() (*EnclaveHandle, error) {
 	initOnce.Do(func() {
-		session, err := nsm.OpenDefaultSession()
+		session, err := nsm.Open()
 		if err != nil {
-			initErr = fmt.Errorf("nsm: open session: %w", err)
+			initErr = err
 			return
 		}
 

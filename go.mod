@@ -4,7 +4,6 @@ go 1.27.4
 
 require (
 	github.com/fxamacker/cbor/v2 v2.10.0
-	github.com/hf/nsm v0.0.0-20220930140112-cd181bd646b9
 	github.com/stretchr/testify v1.12.1
 )
 

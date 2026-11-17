@@ -24,12 +24,23 @@ const (
 	exitUsage  = 2
 )
 
+// passedLine is the last line of a run in which every check passed. An
+// enclave has no exit code to give its parent, so the Makefile's run target
+// looks for this line in the enclave's console output.
+const passedLine = "nsm-check: all checks passed"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run parses args, opens the NSM, runs the checks and returns the exit code.
+// run checks the NSM of the enclave this process runs in.
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWith(nsm.Open, args, stdout, stderr)
+}
+
+// runWith parses args, opens the NSM with open, runs the checks and returns
+// the exit code.
+func runWith(open func() (*nsm.Session, error), args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("nsm-check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	pcrWrites := flags.Bool("pcr-writes", false,
@@ -41,13 +52,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	session, err := nsm.Open()
+	session, err := open()
 	if err != nil {
 		return fail(stderr, err)
 	}
 
 	err = nsmcheck.Run(session, stdout, nsmcheck.Options{PCRWrites: *pcrWrites})
 	if err := errors.Join(err, session.Close()); err != nil {
+		return fail(stderr, err)
+	}
+	if _, err := fmt.Fprintln(stdout, passedLine); err != nil {
 		return fail(stderr, err)
 	}
 

@@ -249,15 +249,111 @@ nothing, so check the envelope's signature and certificate chain before trusting
 ## Checking an Enclave's NSM
 
 `cmd/nsm-check` runs a series of checks against the NSM of the enclave it is started in, in the
-manner of `nsm-check` from the Rust NSM API:
+manner of `nsm-check` from the Rust NSM API. It reads the NSM's description and PCRs, requests
+attestation documents and reads random bytes. With `-pcr-writes` it also extends and locks PCRs.
+
+It only works where there is an NSM, so the `Makefile` wraps it in an Enclave Image File (EIF)
+and runs that in an enclave:
 
 ```sh
-go build -o nsm-check ./cmd/nsm-check
+make eif   # compile nsm-check, put it in a container image, build build/nsm-check-<arch>.eif
+make run   # run the EIF in an enclave, show its console, report PASS or FAIL
 ```
 
-Run inside an enclave, it reads the NSM's description and PCRs, requests attestation documents
-and reads random bytes. With `-pcr-writes` it also extends and locks PCRs. Those changes last
-until the enclave terminates, so use that flag only in an enclave started for the purpose.
+`make qemu` runs it against QEMU's emulated NSM, which needs no AWS; see
+[below](#in-qemu-without-aws). `make help` lists every target and variable.
+
+### What the machine needs
+
+Run both commands on the parent instance, an EC2 instance with Nitro Enclaves enabled. It needs:
+
+- `nitro-cli`, set up as the [AWS guide][nitro-cli-install] describes, with the
+  `nitro-enclaves-allocator` service running. `nitro-cli` opens `/dev/nitro_enclaves`, which
+  belongs to root and the `ne` group. If your user is not in that group, `make run` and
+  `make terminate` call `nitro-cli` through `sudo`, which may ask for your password.
+- Docker, running, with your user in the `docker` group. `nitro-cli` reads the image from it.
+- `make`, and Go at the version `go.mod` names.
+- 1 vCPU and 512 MiB free in the allocator's pool, which `/etc/nitro_enclaves/allocator.yaml`
+  sizes. An enclave that is already running holds part of the pool. `make run CPU_COUNT=2
+  MEMORY=1024` asks for a different amount. An enclave gets whole cores, so on an instance whose
+  cores have two threads the count must be even; with one vCPU there, `nitro-cli` reports that
+  full CPU cores have not been set.
+
+An EIF can be built elsewhere and copied over, as long as the machine that builds it has
+`nitro-cli`, Docker and the architecture of the instance. Copy `Makefile` and `build/` to the
+instance: `make run` uses the EIF it finds and builds one only when there is none.
+
+### Reading the result
+
+`make run` starts the enclave in debug mode with its console attached, because the console is the
+only place an enclave can show output. After the kernel's boot messages come one line per check
+and then the verdict:
+
+```
+ok    NSM description
+ok    PCR lengths
+ok    initial PCR state
+ok    attestation
+ok    random bytes
+nsm-check: all checks passed
+```
+
+The enclave shuts down when `nsm-check` exits. `make run` then prints `PASS`, or prints `FAIL` and
+exits with an error when the verdict line is missing. A check that fails prints
+`FAIL  <check>: <reason>`. The console output is kept in `build/nsm-check-<arch>.console.log`.
+Should the enclave still be running, `make terminate` stops it.
+
+An enclave in debug mode gets attestation documents whose PCRs are made up entirely of zeros.
+`nsm-check` does not look at those values.
+
+### Running every check
+
+```sh
+make run PCR_WRITES=1
+```
+
+This builds a second EIF, `build/nsm-check-pcr-writes-<arch>.eif`, which runs
+`nsm-check -pcr-writes`. That adds four checks, which extend PCRs 16 and up and then lock every
+PCR. The changes last until the enclave terminates, which here is when the run ends. Give
+`-pcr-writes` only in an enclave started for the purpose, never in one that does other work.
+
+### In QEMU, without AWS
+
+`make qemu` runs the same binary on a workstation. It boots the kernel and the NSM driver that
+`nitro-cli` puts in every EIF, in QEMU, against QEMU's emulated NSM device:
+
+```sh
+make qemu                # the checks that only read
+make qemu PCR_WRITES=1   # every check
+```
+
+It prints the same lines and the same `PASS` or `FAIL`, and keeps the console output in
+`build/nsm-check-<arch>.qemu.log`. It needs:
+
+- `qemu-system-x86_64` from QEMU 9.2 or later, built with the NSM device (`virtio-nsm-device`).
+  QEMU emulates the NSM for x86-64 guests only. It uses KVM when it can and runs without it.
+- `bzImage` and `nsm.ko` from `nitro-cli`'s x86-64 blobs. They are looked for in
+  `/usr/share/nitro_enclaves/blobs`, or in `NITRO_CLI_BLOBS` when that is set.
+- `cpio`, `make` and Go.
+
+The guest's init is `internal/qemuinit`. It loads the driver and locks PCRs 0 to 15, which an
+enclave's init and the hypervisor do in a real enclave, and then runs `nsm-check`.
+
+This checks the driver against the kernel module that enclaves load and against an NSM written by
+someone else, which no unit test can. It does not check AWS's NSM, and it does not boot an EIF.
+Run it before `make run`, not in place of it.
+
+### Without make
+
+`make run` runs this, with `sudo` in front where it is needed, and then looks for the verdict line
+in the output:
+
+```sh
+nitro-cli run-enclave --eif-path build/nsm-check-<arch>.eif --enclave-name nsm-check \
+    --cpu-count 1 --memory 512 --attach-console
+```
+
+[nitro-cli-install]: https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-cli-install.html
 
 [ci-badge]: https://github.com/pkilar/nitro-enclaves-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main
 [ci]: https://github.com/pkilar/nitro-enclaves-sdk-go/actions/workflows/ci.yml

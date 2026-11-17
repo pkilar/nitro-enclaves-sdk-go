@@ -95,24 +95,27 @@ func TestParseAttestationDoc(t *testing.T) {
 func TestParseAttestationDoc_RejectsMalformedPayloads(t *testing.T) {
 	t.Parallel()
 
-	// {"module_id": "a", "module_id": "b"}
-	duplicateKey := "a2" + "696d6f64756c655f6964" + "6161" + "696d6f64756c655f6964" + "6162"
-	// The limits apply to fields the decoder skips too, so these use a field
-	// the document does not have.
-	// {"extra": [[[[[1]]]]]}: five arrays deep inside the map.
-	tooDeep := "a1" + "656578747261" + "8181818181" + "01"
-	// {"extra": [0, 0, ... 65 times]}
-	tooManyElements := "a1" + "656578747261" + "9841" + strings.Repeat("00", 65)
-	// {"extra": {0: 0, 1: 0, ... 65 pairs}}
-	var tooManyPairs strings.Builder
-	tooManyPairs.WriteString("a1" + "656578747261" + "b841")
+	// Each of these is the valid fixture with a tenth entry added, so that
+	// entry is the only reason to refuse the document.
+	withEntry := func(entry string) string { return "aa" + docFixture[2:] + entry }
+	// "module_id" a second time.
+	duplicateKey := withEntry(docModuleID)
+	// The limits apply to entries the decoder skips too, so these add one the
+	// document does not have.
+	// "extra": [[[[[1]]]]], five arrays deep inside the map.
+	tooDeep := withEntry("656578747261" + "8181818181" + "01")
+	// "extra": [0, 0, ... 65 times]
+	tooManyElements := withEntry("656578747261" + "9841" + strings.Repeat("00", 65))
+	// "extra": {0: 0, 1: 0, ... 65 pairs}
+	var pairs strings.Builder
 	for key := range 65 {
 		if key < 24 {
-			fmt.Fprintf(&tooManyPairs, "%02x00", key)
+			fmt.Fprintf(&pairs, "%02x00", key)
 		} else {
-			fmt.Fprintf(&tooManyPairs, "18%02x00", key)
+			fmt.Fprintf(&pairs, "18%02x00", key)
 		}
 	}
+	tooManyPairs := withEntry("656578747261" + "b841" + pairs.String())
 
 	tests := []struct {
 		name    string
@@ -129,7 +132,7 @@ func TestParseAttestationDoc_RejectsMalformedPayloads(t *testing.T) {
 		{name: "duplicate key", payload: fromHex(t, duplicateKey)},
 		{name: "nested too deeply", payload: fromHex(t, tooDeep)},
 		{name: "array with too many elements", payload: fromHex(t, tooManyElements)},
-		{name: "map with too many pairs", payload: fromHex(t, tooManyPairs.String())},
+		{name: "map with too many pairs", payload: fromHex(t, tooManyPairs)},
 		{name: "wrong field type", payload: fromHex(t, "a1"+"696d6f64756c655f6964"+"01")},
 	}
 

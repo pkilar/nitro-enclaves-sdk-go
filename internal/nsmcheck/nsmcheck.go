@@ -329,13 +329,20 @@ func (c *checker) lockedAreReadOnly() error {
 
 // refused returns nil if err shows that the NSM refused a request, and an
 // error describing what happened otherwise.
+//
+// Only an error code the NSM sends as a refusal counts. InvalidResponse does
+// not: the handle reports it when a reply is of the wrong kind, which is a
+// broken exchange and says nothing about whether the request was refused.
+// Success does not either. The NSM API does not say which code each refusal
+// uses, so every other code is accepted.
 func refused(err error) error {
 	if err == nil {
 		return errors.New("the NSM accepted a request it should refuse")
 	}
 
 	var nsmErr *nsm.Error
-	if !errors.As(err, &nsmErr) {
+	if !errors.As(err, &nsmErr) ||
+		nsmErr.Code == response.ECInvalidResponse || nsmErr.Code == response.ECSuccess {
 		return fmt.Errorf("want a refusal from the NSM, got: %w", err)
 	}
 

@@ -3,7 +3,10 @@ package nsmcheck
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
@@ -304,6 +307,70 @@ func TestRun_NoticesAMisbehavingNSM(t *testing.T) {
 			wantCheck: "locking PCR ranges",
 		},
 		{
+			name: "wrong kind of reply to locking a reserved PCR",
+			device: func(t *testing.T) *misbehavingNSM {
+				wrong := encode(t, "LockPCRs")
+
+				return &misbehavingNSM{Device: nsmtest.NewDevice(), answer: func(req []byte) []byte {
+					var lock map[string]request.LockPCR
+					if requestName(t, req) != "LockPCR" || cbor.Unmarshal(req, &lock) != nil {
+						return nil
+					}
+					if lock["LockPCR"].Index >= nsmtest.ReservedPCRs {
+						return nil
+					}
+
+					return wrong
+				}}
+			},
+			pcrWrites: true,
+			wantCheck: "reserved PCRs cannot be locked",
+		},
+		{
+			name: "wrong kind of reply to locking a range past the last PCR",
+			device: func(t *testing.T) *misbehavingNSM {
+				wrong := encode(t, "LockPCR")
+
+				return &misbehavingNSM{Device: nsmtest.NewDevice(), answer: func(req []byte) []byte {
+					var lock map[string]request.LockPCRs
+					if requestName(t, req) != "LockPCRs" || cbor.Unmarshal(req, &lock) != nil {
+						return nil
+					}
+					if lock["LockPCRs"].Range <= nsmtest.MaxPCRs {
+						return nil
+					}
+
+					return wrong
+				}}
+			},
+			pcrWrites: true,
+			wantCheck: "locking PCR ranges",
+		},
+		{
+			name: "wrong kind of reply to extending a locked PCR",
+			device: func(t *testing.T) *misbehavingNSM {
+				wrong := encode(t, "LockPCR")
+				// The first extends are of the free PCRs, extendRounds times
+				// each. Every extend after those is of a locked PCR.
+				extendsOfFreePCRs := (nsmtest.MaxPCRs - nsmtest.ReservedPCRs) * extendRounds
+				extends := 0
+
+				return &misbehavingNSM{Device: nsmtest.NewDevice(), answer: func(req []byte) []byte {
+					if requestName(t, req) != "ExtendPCR" {
+						return nil
+					}
+					extends++
+					if extends <= extendsOfFreePCRs {
+						return nil
+					}
+
+					return wrong
+				}}
+			},
+			pcrWrites: true,
+			wantCheck: "locked PCRs are read-only",
+		},
+		{
 			name: "locked PCR that can still be extended",
 			device: func(t *testing.T) *misbehavingNSM {
 				var extensions byte
@@ -384,6 +451,43 @@ func TestPayloadOf_RejectsWhatIsNotAnEnvelope(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Nil(t, got)
+		})
+	}
+}
+
+// A check that expects the NSM to say no must not be satisfied by a failure of
+// some other kind.
+func TestRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		// wantRefusal is whether err shows the NSM refusing the request.
+		wantRefusal bool
+	}{
+		{name: "NSM answers ReadOnlyIndex", err: &nsm.Error{Code: response.ECReadOnlyIndex}, wantRefusal: true},
+		{
+			name:        "NSM answers InvalidIndex, wrapped",
+			err:         fmt.Errorf("lock PCR 3: %w", &nsm.Error{Code: response.ECInvalidIndex}),
+			wantRefusal: true,
+		},
+		{name: "request succeeded", err: nil},
+		{name: "reply of the wrong kind", err: &nsm.Error{Code: response.ECInvalidResponse}},
+		{name: "error reply that says Success", err: &nsm.Error{Code: response.ECSuccess}},
+		{name: "device call failed", err: &nsm.IoctlError{Errno: syscall.EIO}},
+		{name: "reply could not be decoded", err: errors.New("nsm: decode response: unknown reply")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := refused(tt.err)
+
+			if tt.wantRefusal {
+				require.NoError(t, got)
+				return
+			}
+			require.Error(t, got)
 		})
 	}
 }

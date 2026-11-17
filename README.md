@@ -268,13 +268,16 @@ make run   # run the EIF in an enclave, show its console, report PASS or FAIL
 Run both commands on the parent instance, an EC2 instance with Nitro Enclaves enabled. It needs:
 
 - `nitro-cli`, set up as the [AWS guide][nitro-cli-install] describes, with the
-  `nitro-enclaves-allocator` service running and your user in the `ne` group.
+  `nitro-enclaves-allocator` service running. `nitro-cli` opens `/dev/nitro_enclaves`, which
+  belongs to root and the `ne` group. If your user is not in that group, `make run` and
+  `make terminate` call `nitro-cli` through `sudo`, which may ask for your password.
 - Docker, running, with your user in the `docker` group. `nitro-cli` reads the image from it.
 - `make`, and Go at the version `go.mod` names.
-- 2 vCPUs and 512 MiB free in the allocator's pool, which `/etc/nitro_enclaves/allocator.yaml`
-  sizes. An enclave that is already running holds part of the pool. `make run CPU_COUNT=4
-  MEMORY=1024` asks for a different amount. On an x86 instance with hyper-threading the vCPU count
-  must be even.
+- 1 vCPU and 512 MiB free in the allocator's pool, which `/etc/nitro_enclaves/allocator.yaml`
+  sizes. An enclave that is already running holds part of the pool. `make run CPU_COUNT=2
+  MEMORY=1024` asks for a different amount. An enclave gets whole cores, so on an instance whose
+  cores have two threads the count must be even; with one vCPU there, `nitro-cli` reports that
+  full CPU cores have not been set.
 
 An EIF can be built elsewhere and copied over, as long as the machine that builds it has
 `nitro-cli`, Docker and the architecture of the instance. Copy `Makefile` and `build/` to the
@@ -342,11 +345,12 @@ Run it before `make run`, not in place of it.
 
 ### Without make
 
-`make run` runs this, and then looks for the verdict line in the output:
+`make run` runs this, with `sudo` in front where it is needed, and then looks for the verdict line
+in the output:
 
 ```sh
 nitro-cli run-enclave --eif-path build/nsm-check-<arch>.eif --enclave-name nsm-check \
-    --cpu-count 2 --memory 512 --attach-console
+    --cpu-count 1 --memory 512 --attach-console
 ```
 
 [nitro-cli-install]: https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave-cli-install.html

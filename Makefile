@@ -14,10 +14,16 @@ HOST_ARCH := $(shell uname -m | sed 's/^x86_64$$/amd64/; s/^aarch64$$/arm64/')
 ARCH      ?= $(HOST_ARCH)
 
 # What `make run` gives the enclave, taken from the pool the parent instance's
-# allocator reserved. On an x86 instance with hyper-threading the vCPU count
-# must be even.
-CPU_COUNT ?= 2
+# allocator reserved. An enclave gets whole cores, so on an instance whose
+# cores have two threads the count must be even: CPU_COUNT=2.
+CPU_COUNT ?= 1
 MEMORY    ?= 512
+
+# nitro-cli opens /dev/nitro_enclaves to start or stop an enclave, and the
+# device belongs to root and the ne group. Where this user cannot open it,
+# those two commands go through sudo. `SUDO=` turns that off.
+NE_DEVICE ?= /dev/nitro_enclaves
+SUDO      ?= $(shell if [ -e $(NE_DEVICE) ] && ! { [ -r $(NE_DEVICE) ] && [ -w $(NE_DEVICE) ]; }; then echo sudo; fi)
 
 # PCR_WRITES=1 adds the checks that extend and lock PCRs. They get an image and
 # an EIF of their own, because the command an enclave runs is fixed in its EIF.
@@ -75,12 +81,12 @@ eif: check-arch image ## Build the Enclave Image File from the image
 
 run: ## Run the EIF in an enclave and report PASS or FAIL (builds the EIF if it is missing)
 	@test -f $(EIF) || $(MAKE) --no-print-directory eif
-	$(NITRO_CLI) run-enclave --eif-path $(EIF) --enclave-name $(name) \
+	$(SUDO) $(NITRO_CLI) run-enclave --eif-path $(EIF) --enclave-name $(name) \
 		--cpu-count $(CPU_COUNT) --memory $(MEMORY) --attach-console 2>&1 | tee $(LOG)
 	$(call verdict,$(LOG))
 
 terminate: ## Terminate the enclave, should it still be running
-	$(NITRO_CLI) terminate-enclave --enclave-name $(name)
+	$(SUDO) $(NITRO_CLI) terminate-enclave --enclave-name $(name)
 
 # The guest is the enclave's kernel with an initramfs of three files: the
 # init from internal/qemuinit, the NSM driver, and the nsm-check binary that

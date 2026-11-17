@@ -14,6 +14,14 @@ import (
 // three bits of an item's first byte.
 const cborTextString = 3
 
+// replyDecoding reads replies the way the NSM's own serde types would: names
+// match exactly, and a key may appear only once. Fields it does not know are
+// skipped, so a newer NSM that adds one is still understood.
+var replyDecoding = mustDecMode(cbor.DecOptions{
+	DupMapKey:         cbor.DupMapKeyEnforcedAPF,
+	FieldNameMatching: cbor.FieldNameMatchingCaseSensitive,
+})
+
 // encodeRequest returns the CBOR encoding of req.
 func encodeRequest(req request.Request) ([]byte, error) {
 	encoded, err := cbor.Marshal(req.Encoded())
@@ -22,17 +30,6 @@ func encodeRequest(req request.Request) ([]byte, error) {
 	}
 
 	return encoded, nil
-}
-
-// wireResponse is the map form of a reply: one entry, keyed by the name of the
-// variant.
-type wireResponse struct {
-	DescribePCR *response.DescribePCR `cbor:"DescribePCR"`
-	ExtendPCR   *response.ExtendPCR   `cbor:"ExtendPCR"`
-	DescribeNSM *response.DescribeNSM `cbor:"DescribeNSM"`
-	Attestation *response.Attestation `cbor:"Attestation"`
-	GetRandom   *response.GetRandom   `cbor:"GetRandom"`
-	Error       response.ErrorCode    `cbor:"Error"`
 }
 
 // decodeResponse decodes one reply from the NSM. A reply that carries an
@@ -50,26 +47,85 @@ func decodeResponse(data []byte) (response.Response, error) {
 		return decodeUnitResponse(data)
 	}
 
-	var wire wireResponse
-	if err := cbor.Unmarshal(data, &wire); err != nil {
+	var variants map[string]cbor.RawMessage
+	if err := replyDecoding.Unmarshal(data, &variants); err != nil {
 		return response.Response{}, fmt.Errorf("nsm: decode response: %w", err)
 	}
-	if wire.Error != "" {
-		return response.Response{}, &Error{Code: wire.Error}
+	if len(variants) != 1 {
+		return response.Response{}, fmt.Errorf("nsm: decode response: reply map has %d entries, want 1", len(variants))
 	}
 
-	res := response.Response{
-		DescribePCR: wire.DescribePCR,
-		ExtendPCR:   wire.ExtendPCR,
-		DescribeNSM: wire.DescribeNSM,
-		Attestation: wire.Attestation,
-		GetRandom:   wire.GetRandom,
+	var (
+		name string
+		body cbor.RawMessage
+	)
+	for name, body = range variants {
 	}
-	if res == (response.Response{}) {
-		return response.Response{}, errors.New("nsm: decode response: no known reply in map")
+
+	return decodeVariant(name, body)
+}
+
+// decodeVariant decodes the fields of the reply variant called name. A byte
+// string the variant requires must be present, as it must for serde.
+func decodeVariant(name string, body cbor.RawMessage) (response.Response, error) {
+	var (
+		res     response.Response
+		err     error
+		missing string
+	)
+
+	switch name {
+	case "Error":
+		var code response.ErrorCode
+		if err = decodeBody(name, body, &code); err == nil {
+			err = &Error{Code: code}
+		}
+	case "DescribePCR":
+		res.DescribePCR = new(response.DescribePCR)
+		if err = decodeBody(name, body, res.DescribePCR); err == nil && res.DescribePCR.Data == nil {
+			missing = "data"
+		}
+	case "ExtendPCR":
+		res.ExtendPCR = new(response.ExtendPCR)
+		if err = decodeBody(name, body, res.ExtendPCR); err == nil && res.ExtendPCR.Data == nil {
+			missing = "data"
+		}
+	case "DescribeNSM":
+		res.DescribeNSM = new(response.DescribeNSM)
+		if err = decodeBody(name, body, res.DescribeNSM); err == nil && res.DescribeNSM.Digest == "" {
+			missing = "digest"
+		}
+	case "Attestation":
+		res.Attestation = new(response.Attestation)
+		if err = decodeBody(name, body, res.Attestation); err == nil && res.Attestation.Document == nil {
+			missing = "document"
+		}
+	case "GetRandom":
+		res.GetRandom = new(response.GetRandom)
+		if err = decodeBody(name, body, res.GetRandom); err == nil && res.GetRandom.Random == nil {
+			missing = "random"
+		}
+	default:
+		err = fmt.Errorf("nsm: decode response: unknown reply %q", name)
+	}
+
+	if err == nil && missing != "" {
+		err = fmt.Errorf("nsm: decode %s response: missing field %q", name, missing)
+	}
+	if err != nil {
+		return response.Response{}, err
 	}
 
 	return res, nil
+}
+
+// decodeBody decodes the value of one reply variant into v.
+func decodeBody(name string, body cbor.RawMessage, v any) error {
+	if err := replyDecoding.Unmarshal(body, v); err != nil {
+		return fmt.Errorf("nsm: decode %s response: %w", name, err)
+	}
+
+	return nil
 }
 
 // decodeUnitResponse decodes a reply that is a bare variant name.

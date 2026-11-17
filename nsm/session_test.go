@@ -322,3 +322,49 @@ func TestSession_CloseIsSafeDuringRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestSend_RejectsNilRequest(t *testing.T) {
+	t.Parallel()
+
+	device := &scriptedDevice{replies: []string{replyLockPCR}}
+	session := NewSession(device)
+
+	_, err := session.Send(nil)
+
+	require.Error(t, err)
+	assert.Zero(t, device.exchanges())
+}
+
+// dirtyBufferDevice answers like a scriptedDevice and counts the exchanges in
+// which the buffer it was handed still held bytes from an earlier reply.
+type dirtyBufferDevice struct {
+	scriptedDevice
+	dirty int
+}
+
+func (d *dirtyBufferDevice) Exchange(request, response []byte) (int, error) {
+	for _, b := range response {
+		if b != 0 {
+			d.dirty++
+			break
+		}
+	}
+
+	return d.scriptedDevice.Exchange(request, response)
+}
+
+// Reply buffers are reused, and replies carry entropy and attestation
+// documents, so a buffer must be empty again by the time it is reused.
+func TestSend_ScrubsReplyBuffersBeforeReuse(t *testing.T) {
+	t.Parallel()
+
+	device := &dirtyBufferDevice{scriptedDevice: scriptedDevice{replies: []string{replyRandom123}}}
+	session := NewSession(device)
+
+	for range 100 {
+		_, err := session.Send(&request.GetRandom{})
+		require.NoError(t, err)
+	}
+
+	assert.Zero(t, device.dirty, "exchanges that were handed a buffer holding an earlier reply")
+}

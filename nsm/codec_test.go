@@ -194,6 +194,19 @@ func TestDecodeResponse_RejectsMalformedReplies(t *testing.T) {
 		data string
 	}{
 		{name: "empty reply", data: ""},
+		// {"GetRandom": {"random": h'01'}, "ExtendPCR": {"data": h'02'}}
+		{name: "two replies in one map", data: "a2" + "6947657452616e646f6d" + "a1" + "6672616e646f6d" + "4101" +
+			"69457874656e64504352" + "a1" + "6464617461" + "4102"},
+		// {"Error": "InternalError", "GetRandom": {"random": h'01'}}
+		{name: "error code together with a reply", data: "a2" + "654572726f72" + "6d496e7465726e616c4572726f72" +
+			"6947657452616e646f6d" + "a1" + "6672616e646f6d" + "4101"},
+		// {"GetRandom": {"random": h'01'}, "GetRandom": {"random": h'02'}}
+		{name: "same reply twice", data: "a2" + "6947657452616e646f6d" + "a1" + "6672616e646f6d" + "4101" +
+			"6947657452616e646f6d" + "a1" + "6672616e646f6d" + "4102"},
+		// {"getrandom": {"random": h'01'}}
+		{name: "reply name in the wrong case", data: "a1" + "6967657472616e646f6d" + "a1" + "6672616e646f6d" + "4101"},
+		// {"GetRandom": {"RANDOM": h'01'}}
+		{name: "field name in the wrong case", data: "a1" + "6947657452616e646f6d" + "a1" + "6652414e444f4d" + "4101"},
 		{name: "unknown bare name", data: "65426f677573"},                                    // "Bogus"
 		{name: "map without a known reply", data: "a0"},                                      // {}
 		{name: "map with an unknown reply", data: "a165426f677573a0"},                        // {"Bogus": {}}

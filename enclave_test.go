@@ -154,10 +154,13 @@ func TestAttest_ReportsReplyWithoutDocument(t *testing.T) {
 	tests := []struct {
 		name  string
 		reply any
+		// wantCode is the NSM error code the error must carry. It is empty for
+		// a reply that cannot be decoded at all, which is not an NSM error.
+		wantCode response.ErrorCode
 	}{
-		{name: "reply is not an attestation", reply: "LockPCR"},
+		{name: "reply is not an attestation", reply: "LockPCR", wantCode: response.ECInvalidResponse},
+		{name: "document is empty", reply: attestationReply([]byte{}), wantCode: response.ECInvalidResponse},
 		{name: "document is null", reply: attestationReply(nil)},
-		{name: "document is empty", reply: attestationReply([]byte{})},
 	}
 
 	for _, tt := range tests {
@@ -166,10 +169,15 @@ func TestAttest_ReportsReplyWithoutDocument(t *testing.T) {
 
 			document, err := handle.Attest(AttestationOptions{})
 
-			var nsmErr *nsm.Error
-			require.ErrorAs(t, err, &nsmErr)
-			assert.Equal(t, response.ECInvalidResponse, nsmErr.Code)
+			require.Error(t, err)
 			assert.Nil(t, document)
+			var nsmErr *nsm.Error
+			if tt.wantCode == "" {
+				assert.NotErrorAs(t, err, &nsmErr)
+				return
+			}
+			require.ErrorAs(t, err, &nsmErr)
+			assert.Equal(t, tt.wantCode, nsmErr.Code)
 		})
 	}
 }

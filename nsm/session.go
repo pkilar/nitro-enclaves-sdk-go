@@ -40,7 +40,7 @@ type Device interface {
 
 // responseBuffers recycles the MaxResponseSize buffers that replies are read
 // into. Decoding copies what it keeps, so a buffer is free again once Send
-// returns.
+// returns; Send zeroes it first.
 var responseBuffers = sync.Pool{
 	New: func() any {
 		buf := make([]byte, MaxResponseSize)
@@ -71,6 +71,10 @@ func NewSession(device Device) *Session {
 // the device fails, the error wraps what the device returned; for the real
 // device that is an *IoctlError.
 func (s *Session) Send(req request.Request) (response.Response, error) {
+	if req == nil {
+		return response.Response{}, errors.New("nsm: request is nil")
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -90,7 +94,12 @@ func (s *Session) Send(req request.Request) (response.Response, error) {
 	if !ok {
 		return response.Response{}, errors.New("nsm: response buffer pool holds the wrong type")
 	}
-	defer responseBuffers.Put(buf)
+	defer func() {
+		// Replies carry entropy and attestation documents. Do not leave one
+		// in a buffer that will be handed out again.
+		clear(*buf)
+		responseBuffers.Put(buf)
+	}()
 
 	n, err := s.device.Exchange(encoded, *buf)
 	if err != nil {

@@ -70,8 +70,10 @@ enclaver build
 
 ## Obtaining an Attestation Document
 
-The heavy-lifting for obtaining an attestation document is done, behind-the-scenes, by [Nitro Security
-Module Interface for Go](https://github.com/hf/nsm).
+Attestation documents come from the enclave's Nitro Security Module (NSM). This module talks to
+it through its own [`nsm` package](https://pkg.go.dev/github.com/pkilar/nitro-enclaves-sdk-go/nsm),
+which follows the request and response model of the official
+[Rust NSM API](https://github.com/aws/aws-nitro-enclaves-nsm-api).
 
 In order for KMS to use NSM attestation documents, the attestation documents
 must include a public key corresponding to a private key accessible by the
@@ -112,12 +114,12 @@ func MakeKMSRequest() error {
 ```
 
 `GetOrInitializeHandle` opens the enclave's NSM device itself. If you already
-hold an open [`nsm.Session`](https://pkg.go.dev/github.com/hf/nsm#Session), or
-want to substitute a fake device in tests, build the handle from that session
+hold an open [`nsm.Session`](https://pkg.go.dev/github.com/pkilar/nitro-enclaves-sdk-go/nsm#Session),
+or want to substitute another device in tests, build the handle from that session
 instead:
 
 ```go
-	session, err := nsm.OpenDefaultSession()
+	session, err := nsm.Open()
 	if err != nil {
 		return err
 	}
@@ -217,6 +219,45 @@ you will likely want:
    have normal production access, so that Nitro Enclaves + KMS can be used to
    enforce separation of duties.
 
+
+## Other NSM Requests
+
+Besides attestation, the handle exposes the rest of the NSM API:
+
+```go
+	description, err := enclaveHandle.Describe()    // version, module ID, PCR count, digest
+	pcr, err := enclaveHandle.DescribePCR(16)       // value and lock state
+	value, err := enclaveHandle.ExtendPCR(16, data) // returns the PCR's new value
+	err = enclaveHandle.LockPCR(16)                 // read-only until the enclave terminates
+	err = enclaveHandle.LockPCRs(32)                // locks PCRs [0, 32)
+	n, err := enclaveHandle.Read(buf)               // entropy from the NSM
+```
+
+When the NSM refuses a request, the error wraps an `*nsm.Error` whose `Code` says why:
+
+```go
+	var nsmErr *nsm.Error
+	if errors.As(err, &nsmErr) && nsmErr.Code == response.ECReadOnlyIndex {
+		// the PCR is locked
+	}
+```
+
+`nsm.ParseAttestationDoc` decodes the content of an attestation document into an
+`nsm.AttestationDoc`. It takes the payload of the document's COSE_Sign1 envelope and verifies
+nothing, so check the envelope's signature and certificate chain before trusting what it returns.
+
+## Checking an Enclave's NSM
+
+`cmd/nsm-check` runs a series of checks against the NSM of the enclave it is started in, in the
+manner of `nsm-check` from the Rust NSM API:
+
+```sh
+go build -o nsm-check ./cmd/nsm-check
+```
+
+Run inside an enclave, it reads the NSM's description and PCRs, requests attestation documents
+and reads random bytes. With `-pcr-writes` it also extends and locks PCRs. Those changes last
+until the enclave terminates, so use that flag only in an enclave started for the purpose.
 
 [ci-badge]: https://github.com/pkilar/nitro-enclaves-sdk-go/actions/workflows/ci.yml/badge.svg?branch=main
 [ci]: https://github.com/pkilar/nitro-enclaves-sdk-go/actions/workflows/ci.yml
